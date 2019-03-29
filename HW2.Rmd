@@ -1,0 +1,269 @@
+---
+title: "HW2"
+author: "Stella Lang"
+date: "February 18, 2018"
+output: word_document
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(MASS)
+library(glmnet)
+library(broom)
+library(psych)
+```
+
+```{r, echo=FALSE}
+# generate training dataset
+N = 500
+P = 200
+
+Beta = c(seq(1, 0, length.out = 21), rep(0, P-21))
+Beta0 = 0.5
+
+# you must set this seed for generating the data
+set.seed(1)
+
+# generate X
+V = matrix(0.5, P, P)
+diag(V) = 1
+X = as.matrix(mvrnorm(N, mu = rep(0, P), Sigma = V))
+
+# generate Y
+y = Beta0 + X %*% Beta + rnorm(N)
+```
+
+## Q1
+
+**(a)** Since $\beta_0$ is not subject to the penalty term, the objective function is differentiable with respect to $\beta_0$. We only need to solve $f(\beta_0)=\frac{1}{2n}||y-\beta_0-X\beta||^2_2$. First we take the derivative of the objective function with respect to $\beta_0$ and set it to 0. Then solve the equation to obtain $\beta_0$ value. The solution is the mean of $y-X\beta$.
+
+**(b)** For $\beta_j$, we need to solve $f(\beta^{(k+1)}_j)=\frac{1}{2n}||y-X_j\beta_j-X_{(-j)}\beta^{(k)}_{(-j)}||^2_2 +\lambda|\beta_j|$ in each update.The solution is given by the soft-thresholding function $\hat{\beta_j}=sign(\hat{z_j})(|\hat{z_j}|-\lambda)_+$ where $\hat{z_j}$ is the mean of $r_jX_j$ and $r_j$ is the partial residuals with respect to the j-th covariate.
+
+**(c)** Initiate $\beta_0$ with the mean of y since all other $\beta_j$'s are zero.To find the smallest value for which all coefficients are 0, we can use $\lambda_{max} = max_j |\frac{X^T_jy}{X^T_jX_j}|$. I wrote a helper function named `find_lambda_max` to loop through all the columns in X to find the $\lambda_{max}$ value, which is 5.806235 in this case.
+
+```{r, echo=FALSE}
+find_lambda_max = function(X, y){
+  ret = c()
+  for (j in 1:ncol(X)){
+    ret[j] = abs(solve(t(X[,j]) %*% X[,j]) %*% X[,j] %*% y)
+  }
+  return(max(ret))
+}
+
+lambda_max = find_lambda_max(X,y)
+```
+
+**(d)** To implement lasso using coordinate descent algorithm, I used the code structure provided by professor and modified it. I added a variable named loss to keep track of the average loss in each iteration. In addition, I wrote a helper function `should_break` to determine whether average loss change more than the tolerance level. If average loss did not change more than the tolerance level, break out of the loop. `LassoFit` will return a list of $\beta_0$s and $\beta$s with respect to each $\lambda$ value.
+```{r}
+# now start to write functions to fit the lasso
+# prepare the soft thresholding function for updating beta_j (part b)
+
+soft_th <- function(b, lambda)
+{
+  sign(b) * max(abs(b) - lambda, 0)
+}
+
+
+# helper function to determine whether average loss changed more than the tolerance level
+should_break = function(loss, window, k, tol = 1e-5) {
+  window_length = floor(window / 2) - 1
+  prev_loss = mean(loss[(k - (window - 1)):(k - (window - 1) + window_length)])
+  curr_loss = mean(loss[(k - (window - 1) + window_length):k])
+  abs(curr_loss - prev_loss) < tol
+}
+
+# initiate lambda as the lambda_max value in part c)
+
+lambda_max = find_lambda_max(X,y)
+
+# produce a sequence of lambda values 
+lambda = exp(seq(log(lambda_max), log(0.01), length.out = 100))
+
+# if you use this formula, you will need to calculate this for the real data too.
+
+LassoFit = function(X, y, lambda, tol = 1e-5, maxiter = 100)
+{
+	# initiate objects to record the values
+	mybeta = matrix(NA, ncol(X), length(lambda))
+	mybeta0 = rep(NA, length(lambda))
+	# mylambda = rep(NA, length(lambda))
+	
+	# initiate values 
+	
+	current_beta = matrix(0, P, 1)
+	
+	current_beta0 = mean(y)
+	
+	for (l in 1:length(lambda))
+	{
+		# reduce the current lambda value to a smaller one
+		current_lambda = lambda[l]
+		loss = rep(0, maxiter)
+		for (k in 1:maxiter)
+		{
+			# update the intercept term based on the current beta values. 
+		  current_beta0 = mean(y - X %*% current_beta)
+			
+			# compute residuals (this is with all variables presented)
+			r = y - current_beta0 - X %*% current_beta
+			
+			# record loss in each iteration
+      loss[k] = mean(r * r)
+      
+			# start to update each beta_j 
+			
+			for (j in 1:ncol(X))
+			{
+				# remove the effect of variable j from model,
+			  # and compute the residual
+				r = r + X[,j] * current_beta[j]
+				
+				beta_ols_j = mean(r * X[,j])
+				
+				# update beta_j using the results in part b)
+				current_beta[j] = soft_th(beta_ols_j, current_lambda)
+				
+				# add the effect of variable j back to the model,
+				# and compute the residual
+				r = r - X[,j] * current_beta[j]
+			}
+			
+			# check if average loss changed more than the tolerance level 
+      # in this iteration (use tol as the threshold)
+			# if not, break out of this loop k
+			if (k > 10){
+			  if (should_break(loss, k = k, window = 10, tol = tol)) break;
+			}
+			
+		}
+		
+		# record the beta_j and beta_0 values
+		mybeta[, l] = current_beta
+		mybeta0[l] = current_beta0
+	}
+	
+	return(list("beta" = mybeta, "b0" = mybeta0, "lambda" = lambda))
+}
+
+```
+
+Next, generate an independent set of 1000 observations as testing dataset. I used a different seed for generating the data. Apply function `LassoFit` I wrote above on the training dataset to obtain the list of parameters. And then make predictions using the parameters obtained earlier. Last, calculate the RMSE (root-mean-square error) using the predictions and true y values. The best $\lambda$ is picked where rmse is the lowest. The value is shown below.
+```{r,echo=FALSE}
+# select the best lambda
+
+# generate test dataset
+N_tst = 1000
+P = 200
+
+Beta_tst = c(seq(1, 0, length.out = 21), rep(0, P-21))
+Beta0 = 0.5
+set.seed(1234)
+
+# generate X
+V_tst = matrix(0.5, P, P)
+diag(V_tst) = 1
+X_tst = as.matrix(mvrnorm(N_tst, mu = rep(0, P), Sigma = V_tst))
+
+# generate Y
+y_tst = Beta0 + X_tst %*% Beta_tst + rnorm(N_tst)
+
+# now, perform the Lasso model on the simulated dataset 
+para_list = LassoFit(X, y, lambda)
+
+# make predictions
+y_pred = matrix(0, 1000, 100)
+for (i in 1:100){
+  y_pred[,i] = para_list$b0[i] + X_tst %*% para_list$beta[,i]
+}
+
+# calculate prediction error using rmse
+rmse = function(actual, predicted) {
+  sqrt(mean((actual - predicted) ^ 2))
+}
+pred_error = c()
+for (i in 1:100){
+  pred_error[i] = rmse(y_tst, y_pred[,i])
+}
+lambda[which.min(pred_error)]
+```
+
+
+## Q2
+
+**(a)** I used `cv.glmnet` from `glmnet` package to tune the parameter. The function will return two $lambda$ values (lambda.min and lambda.1se). In this exercise, I used "lambda.min" as the best parameter and fixed it for the rest of questions. The table of $\lambda$ value and number of nonzero parameters are shown below.
+
+```{r,echo=FALSE}
+set.seed(1)
+lasso.fit = cv.glmnet(X, y, alpha = 1, nfolds = 10)
+best_lambda = unlist(glance(lasso.fit))[1]
+```
+
+```{r,echo=FALSE}
+results = data.frame(lambda = unlist(glance(lasso.fit)), num = c(sum(coef(lasso.fit, s = "lambda.min")[-1] != 0), sum(coef(lasso.fit, s = "lambda.1se")[-1] != 0)))
+colnames(results) = c("Lambda", "Number of nonzero parameters")
+knitr::kable(results, digits = 4)
+```
+
+
+**(b)** First initiate two 20 by 500 matrices to store the new generated y and predictions. Then fit the model on the new generated dataset with the best $\lambda$ value selected from part (a). Use the model to make predictions. Repeat the whole process 20 times. Last, the estimate of degree of freedom is obtained by summing up the covariances for each observation and dividing it by the error variance (which is 1 in this case). The estimate of d.o.f I got is 60.2442, which is quite close to the number of non-zero parameters.
+
+```{r,echo=FALSE}
+set.seed(4234)
+# create new matrix to store data
+new_y = matrix(0, 20, 500)
+y_hat = matrix(0, 20, 500)
+# new_y[1,] = y
+# y_hat[1,] = predict(glmnet(X, new_y[1,], alpha = 1, lambda = best_lambda), X)
+for (i in 1:20){
+  # generate new y
+  new_y[i,] = Beta0 + X %*% Beta + rnorm(N)
+  # use the best lambda value from previous part and fit on the new dataset
+  new_fit = glmnet(X, new_y[i,], alpha = 1, lambda = best_lambda)
+  # make predictions
+  y_hat[i,] = predict(new_fit, X)
+}
+
+# create another vector to hold covariance values for each observations
+cov = c()
+for (i in 1:500){
+ cov[i] = cov(y_hat[,i], new_y[,i])
+}
+
+# estimate d.o.f by summing up all the covariances and devided by the error variance (which is 1 in this case)
+df_est = sum(cov)
+```
+
+**(c)** For ridge regression, I used `lm.ridge` function from `MASS` package. Since lm.ridge does not have default $\lambda$ values, I used the same range of $\lambda$ values from glmnet function. The best $\lambda$ is picked where model achieves the lowest GCV, which is 28.76435. The number of non-zero parameters is 200 because ridge does not shrink coefficients to zero.
+
+```{r,echo=FALSE}
+set.seed(1)
+new = glmnet(X, y, alpha = 0)
+range = new$lambda
+ridge.fit = lm.ridge(y ~ X, alpha = 0, lambda = range)
+best_lambda2 = range[which.min(ridge.fit$GCV)]
+```
+
+Apply the same method in part b to obtain the estimate of degree of freedom. I got 168.1785.
+```{r,echo=FALSE}
+set.seed(422)
+
+new_y = matrix(0, 20, 500)
+y_hat = matrix(0, 20, 500)
+for (i in 1:20){
+  new_y[i,] = Beta0 + X %*% Beta + rnorm(N)
+  new_fit = lm.ridge(new_y[i,] ~ X, alpha = 0, lambda = best_lambda2)
+  y_hat[i,] = as.matrix(cbind(const=1,X)) %*% coef(new_fit)
+}
+
+cov = c()
+for (i in 1:500){
+ cov[i] = cov(y_hat[,i], new_y[,i])
+}
+df_est2 = sum(cov)
+```
+The theoretical d.o.f is calculated using $df(\lambda)=Trace(X(X^TX+\lambda I)^{-1}X^T)$. For this $\lambda$, the theoretical d.o.f is 170.5758. My estimate of d.o.f is very close to the theoretical value.
+
+```{r,echo=FALSE}
+# theoretical df 
+df_theo = tr(X %*% solve(t(X) %*% X + as.vector(best_lambda2) * diag(200)) %*% t(X))
+```
+
