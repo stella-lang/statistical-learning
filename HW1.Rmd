@@ -1,0 +1,223 @@
+---
+title: "HW1"
+author: "Stella Lang"
+date: "February 4, 2018"
+output:
+  word_document: default
+  html_document: default
+---
+
+## Q1
+
+```{r,echo=FALSE}
+library(mlbench)
+data(BostonHousing)
+```
+
+
+**(a)** Among many user-written packages, package `pastecs` has an easy to use function called `stat.desc` to display a table of descriptive statistics for a list of variables. Therefore, I used `stat.desc` to construct a simple descriptive analysis. 
+```{r, echo=FALSE, message=FALSE}
+library(pastecs)
+options(scipen = 100)
+options(digits = 2)
+stat.desc(BostonHousing)
+```
+
+From the table above, we can see that the range of each variable varies. Some variables have relatively small range (e.g. `nox`) while some variables have huge range (e.g. `tax`). the range of predictor variables plays an important role in determining the sign of regression coefficients. The variance of the regression coefficient (slope of regression line) is inversely proportional to the spread of the predictor variable. If all values of the predictor variable are close together, then the variance of the sampling distribution of the slope will be higher. In some cases the variance will be so high that an analyst will discover a negative estimate of a coefficient that is actually positive.
+
+Also note that the variable `zn` has a lot of "0" values and a wide range (from 0 to 100). If we construct a simple linear model, it might not be a good fit.
+
+**(b)** Now we perform the best subset selection using BIC criterion. For this question, I used `leaps` package in R to calculate BIC values and rescale them to (0, 1).
+
+The results are displayed in the plot below. X-axis represents the size of model while y-axis represents the BIC values for each model. To select the best model, we will pick the model with smallest BIC among all the models. From the plot, we can see that the minimal BIC is attained when the model size is 12. 
+
+```{r, echo=FALSE, fig.height=4, fig.width=6}
+library(leaps)
+# calcualte BIC values for each model
+RSSleaps = regsubsets(medv ~ ., data = BostonHousing, nvmax = 13)
+sumleaps = summary(RSSleaps, matrix = T)
+msize = apply(sumleaps$which, 1, sum)
+
+# Rescale Cp, AIC, BIC to (0,1).
+inrange = function(x) { (x - min(x)) / (max(x) - min(x)) }
+BIC = sumleaps$bic
+BIC = inrange(BIC)
+
+# plot the results
+plot(range(msize), c(0, 1.1), type = "n", xlab = "Model Size (with Intercept)", ylab = "Model Selection Criteria")
+points(msize, BIC, col = "dodgerblue", type = "b")
+legend("topright", lty = 1, col = c("dodgerblue"), legend = c("BIC"))
+```
+
+The selected variables in the best model are listed below. 
+
+```{r,echo=FALSE}
+# retrieve the variable subset from the best model
+varid = sumleaps$which[order(BIC)[1], ]
+names(BostonHousing)[varid[-1]]
+```
+The corresponding parameters for each selected variables are listed below.
+```{r, echo=FALSE}
+# parameters for selected variables
+coef(RSSleaps, 11)
+```
+
+
+**(c)** To perform forward stepwise selection using AIC criterion, I used `step` function in `stats` package. The final model with selected variables and their parameters is shown below.
+```{r, echo=FALSE}
+# forward stepwise selection using AIC criterion
+full = lm(medv ~ ., data = BostonHousing)
+null = lm(medv ~ 1, data = BostonHousing)
+c_forward = step(null, scope = list(lower = null, upper = full), direction = "forward", trace = 0)
+c_forward$coefficients
+```
+
+To perform backward stepwise selection using Marrow's Cp criterion, I used `SignifReg` function in [`SignifReg`](https://www.rdocumentation.org/packages/SignifReg/versions/1.0/topics/SignifReg) package. The final model with selected variables and their parameters is shown below.
+```{r, echo=FALSE}
+# backward stepwise selection using Marrow's Cp criterion
+library(SignifReg)
+c_backward = SignifReg(medv ~ ., data = BostonHousing, alpha = 0.05, direction = "backward", 
+criterion = "Cp", correction = "None")
+c_backward$coefficients
+```
+
+**(d)** Forward and backward stepwise selection is not guaranteed to give us the best model containing a particular subset of the p predictors but that's the price to pay in order to avoid overfitting. For a given model size, they are going to have an RSS that typically will be above that for best subset. This happens only when there's correlation between the features. If the variables had no correlation, then the variables chosen by the two methods would be exactly the same. Because of the correlation between the features you can get a discrepancy between best subset and forward stepwise.
+Because the intercorrelation between the regressors affect the order of term entry and removal.  Since you are approaching the “final” model from two different directions this aspect of your matrix can cause the methods to converge on different models. 
+
+As for comparing forward and backward selection, in the forward selection process a regressor added at an earlier step in the process may become redundant because of the relationship between it and those regressors added afterward.  As a result, the final model may contain terms of little value.
+
+Therefore, if I get different results using these three algorithms (assume that we use the same selection criterion), I would prefer backward selection over forward selection and best subset to avoid overfitting and redundant variables.
+
+**(e)** Generally speaking, AIC presents the danger that it might overfit, whereas BIC presents the danger that it might underfit, simply in virtue of how they penalize free parameters. Among the three criteria, Mallow's Cp and AIC are very similar. As for AIC and BIC, AIC is best for prediction as it is asymptotically equivalent to cross-validation while BIC is best for explanation as it is allows consistent estimation of the underlying data generating process. When n is large the two models will produce quite different results. Then the BIC applies a much larger penalty for complex models, and hence will lead to simpler models than AIC. Therefore, if I get different results using these three criteria (assume that we use the same selection algorithm), I would prefer BIC over AIC and Mallow's Cp because it picks smaller model.
+
+
+## Q2
+
+**(a)** MNIST dataset is a dataset of handwritten digits (from 0 to 9) including a training set of 60,000 observations and a test set of 10,000 examples. The dataset has 785 variables with one label variable indicating the classification and other 784 variables representing each pixel's value in a 28*28 grayscale image. Each pixel value is ranging from 0 to 255.
+
+Our goal is to apply an efficient K nearest neighbor algorithm on the MNIST dataset and classify examples in the test dataset.
+
+**(b)** To implement a more efficient algorithm, I first dropped some columns that have over 80% of zero values. After dropping those columns, the dimensionality is reduced to 616 variables. Next, I wrote several helper functions. `euclideanDist` is to calculate euclidean distance given the two input vectors. `Mode` is to pick the most voted label from top k neighbors. `calc_class_acc` is to calculate accuracy given actual labels and predictions. Then, based on the euclidean distance, pick the top k neighbors with small distances and make predictions using the most voted labels among k neighbors. To break a tie for a k nearest neighbor, we can decrease k by 1 until you have broken the tie. 
+
+```{r, eval=FALSE, echo=FALSE}
+# load the data
+train = read.csv("fashion-mnist_train.csv")
+test = read.csv("fashion-mnist_test.csv")
+```
+
+```{r, eval=FALSE,echo=FALSE}
+# drop columns that have over 80% of 0s
+cutoff = 0.8
+n = nrow(train)
+keep = c()
+for (i in 1:785){
+  if (sum(train[,i]==0)/n > cutoff){
+    keep[i] = FALSE
+  }
+  else{
+    keep[i] = TRUE
+  }
+}
+new_train = train[keep]
+new_test = test[keep]
+```
+
+```{r, echo=FALSE}
+# function for calculating Euclidean Distance
+euclideanDist = function(a, b){
+  d = 0
+  for(i in c(1:(length(a)-1) )){
+    d = d + (a[[i]]-b[[i]])^2
+  }
+  d = sqrt(d)
+  return(d)
+}
+```
+
+```{r, echo=FALSE}
+# helper function to pick the most voted labels
+Mode = function(x) {
+  ux = unique(x)
+  ux[which.max(tabulate(match(x, ux)))]
+}
+```
+
+```{r, echo=FALSE}
+# helper function for calculating accuracy
+calc_class_acc = function(actual, predicted) {
+  mean(actual == predicted)
+}
+```
+
+```{r, echo=FALSE}
+knn = function(train, test, k){
+  # empty pred vector
+  pred = c()   
+  # looping over each record of test data
+  for(i in c(1:nrow(test))){   
+    eu_dist = c()       
+    eu_char = c()
+    # looping over train data 
+    for(j in c(1:nrow(train))){
+      # adding euclidean distance b/w test data point and train data to eu_dist vector
+      eu_dist = c(eu_dist, euclideanDist(test[i,], train[j,]))
+      # adding class variable of training data in eu_char
+      eu_char = c(eu_char, as.character(train[j,][[6]]))
+    }
+    # combine labels and distance in a data frame
+    eu = data.frame(eu_char, eu_dist) 
+    # sorting eu dataframe to get top K neighbors 
+    eu = eu[order(eu$eu_dist),]      
+    eu = eu[1:k,]              
+    # pick the most voted as predictions
+    pred = c(pred, Mode(eu[,1]))
+  }
+  return(pred) 
+}
+
+```
+
+```{r, echo=FALSE}
+# another knn algorithm using rdist to calculate euclidean distance but limited to small dataset
+another_knn = function(train, test, k){
+   n = nrow(test)
+   labels = train[, 1]
+   x_trn = train[, -1]
+   if (n <= k) stop("k can not be more than n-1")
+   neigh = matrix(0, nrow = n, ncol = 1)
+   library(fields)
+   dist.mat = rdist(test, x_trn)
+   for(i in 1:n) {
+      euc.dist = dist.mat[i, ]
+      eu = data.frame(labels, euc.dist)
+      eu = eu[order(eu[,2]),]   
+      eu = eu[1:k,] 
+      neigh[i,] = Mode(eu[,1])
+   }
+   return(neigh)
+}
+
+```
+
+**(c)** Using 1000 observations from the train dataset and k=10, we can approximately get on average 70% accuracy on the test dataset. With k increases, error rate on the train dataset increases while on the test dataset first decreases then increases. The final model may not be as accurate as using full dataset but saves a lot of time on computation. The degree of freedom is n/k, which is 1000/10.
+
+```{r, eval=FALSE, echo=FALSE}
+# apply PCA to improve knn
+pca_train = prcomp(new_train[,-1])
+new_pca_train = cbind(new_train[,1], pca_train)
+pca_test = predict(pca_train, new_test[,-1])
+new_pca_test = cbind(new_test[,1], pca_test)
+var_trn = pca_train$x[, 1:40]
+#preds_xx = knn(new_pca_train[1:1000,], new_pca_test[1:100], k=10)
+```
+
+```{r, eval=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+# testing the algorithm
+sample_trn = as.matrix(new_train[1:400,])
+sample_tst = as.matrix(new_test[1:20,])
+preds = knn(sample_trn, sample_tst, 10)
+calc_class_acc(actual = sample_tst[1:20,1], predicted = preds)
+```
+
+**(d)** Since the dataset is high dimensional, calculating euclidean distance is quite computationally time-comsuming. To speed up the computation, we can use PCA to reduce feature dimensionalities. Or we can remove the columns with over 80% 0 values in the original dataset. In addition, when we use the train dataset to predict the classifications, we can randomly picking partial observations in the training dataset instead of using the whole 60,000 observations. If possible, we can also use parallel processing to speed up the computation.
+
