@@ -1,0 +1,200 @@
+---
+title: "STAT542 HW6"
+author: "Stella Lang"
+date: "May 4, 2018"
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+library(caret)
+library(randomForest)
+library(scales)
+library(glmnet)
+library(dplyr)
+library(broom)
+```
+
+
+## Q1 Data Preprocessing
+
+The original Melbourne housing dataset provided contains 34857 observations with 21 attributes. First, I loaded the data into R and converted the label class to factor and the rest to numeric. To check how many NAs in each attribute, I summarized all the results below. From the table we can see that Landsize, BuildingArea and YearBuilt have over 30% NAs. Therefore, I removed these columns with over 30% NAs in the dataset, which reduces the number of attributes to 18. After removing those variable, I removed rows with missing values by using complete.cases function. This reduces the size of dataset into 20423 observations with 18 attributes. Take a closer look at the dataset, we can see that Address, SellerG, Longtitude, Latitude, Propertycount and Postcode are not very useful for price prediction since all the housing are in the same city and there are not significant differences in longtitude and latitude. In addition, other variables like distance, suburb and regionname have already covered the information of those variables mentioned. Therefore, I also excluded them from the housing dataset, which decreases the number of attributes to 12. Last, I normalized Price variable with 0 mean and unit variance, while retaining rank order and the relative size of separation between values. This is due to the fact that price variable has large values compared with other variables, which may lead to extremely large rmse when we evaluate the performance of models. After data preprocessing, split the dataset into training and testing datasets with 3:1 ratio (75% for training and 25% for testing), which have 15319 and 5104 observations respectively with 12 attributes.
+
+
+```{r}
+# load the dataset
+housing = read.csv("Melbourne_housing_FULL.csv")
+
+# check missing values in each column
+knitr::kable(sapply(housing, function(x){sum(is.na(x)|x=="#N/A")}))
+
+
+# remove Landsize, BuildingArea and YearBuilt since there are too many NAs and rows with Price NAs
+# exclude Address, SellerG, Longtitude, Latitude, Propertycount and Postcode since they are not very useful for analysis later
+housing = housing[!is.na(housing$Price),-which(names(housing) %in% c("Landsize","BuildingArea", "YearBuilt", "Address", "SellerG", "Longtitude", "Lattitude", "Postcode", "Propertycount"))]
+
+# remove rows with #N/A or NAs
+# housing = housing[housing$Distance!="#N/A" & housing$Regionname!="#N/A",]
+housing = housing[complete.cases(housing),]
+
+# plot(as.numeric(train$Distance),train$Rooms, col = c(ifelse(train$Pricerange == "high", "red", ifelse(train$Pricerange == "medium", "yellow", "blue"))))
+
+# rescale Price
+housing$Price = scale(housing$Price)
+housing$Distance = as.numeric(housing$Distance)
+
+# split data into training and testing dataset
+idx = createDataPartition(housing$Price, p = 0.75, list = FALSE)
+train = housing[idx, ]
+test = housing[-idx, ]
+```
+
+Now let's get a general idea of how prices are effected by different vairables. For example, to see whether number of rooms and region have impact on prices, I made a plot of number of rooms vs price which are grouped by regions to check the general trends of price. From the plot below, we can see that most of houses have 1-6 rooms and houses in Northern Victoria seem to have higher prices than other regions. Especially houses in Northern Victoria with 4 or 5 rooms have extremely high prices compared with those in other regions.
+
+```{r}
+plot(housing$Rooms, housing$Price, col = housing$Regionname, xlab = "Number of Rooms", ylab = "Price", main = "# of Rooms v.s. Prices for different regions")
+legend("topright", legend = unique(housing$Regionname), col = 1:length(housing$Regionname), pch = 1)
+```
+
+```{r}
+# plot(housing$Bathroom, housing$Price, col = housing$Regionname, xlab = "Number of Bathrooms", ylab = "Price", main = "# of Rooms v.s. Prices for different regions")
+# legend("topright", legend = unique(housing$Regionname), col = 1:length(housing$Regionname), pch = 1)
+```
+
+
+## Q2 Clustering Analysis
+
+For this housing dataset, my main goal is to obtain groupings or clusters of similar houses that may be used to explain or predict prices. The variables I selected are Rooms, Bathroom and Car. The clustering methods used is kmeans. For kmeans, it is very easy to implement. With a large number of variables, kmeans may be computationally faster if k is small. And it may produce tighter clusters than hierarchical clustering. One of the disadvantages of kmeans is sensitivity to scale. Rescaling datasets may completely change results. In addition, it is difficult to predict the number of clusters and initial seeds have a strong impact on the final results. 
+
+In this part, I first used kmeans to group houses into three clusters. The plot is shown below. The x-axis is the number of rooms and y-axis is number of bathrooms. From the plot we can see that three clusters are houses with less than four rooms and three bathrooms, houses with 3-12 rooms and 2-8 bathrooms and houses with 4-16 rooms and 1-8 bathrooms respectively. Take a closer look, we can see that red group are houses with room and bathroom ratio in 1-1.5 while blue group are houses with room and bathroom ratio over 2. This may be helpful for predicting price. We could try using the rooms and bathroom ratio as one of the predictors.
+
+```{r}
+# k mean clustering
+housing.kmean = kmeans(train[,c("Rooms", "Bathroom", "Car")], centers = 3, nstart = 20, trace = TRUE) 
+
+# define a new variable PriceLevel using qunatile as rules for seperation
+housing.kmean$cluster <- as.factor(housing.kmean$cluster)
+# train$PriceLevel = ifelse(train$Price > quantile(train$Price, probs = c(1/3,2/3))[2], "high", ifelse(train$Price > quantile(train$Price, probs = c(1/3,2/3))[1], "medium", "low"))
+
+# plot the fitted clusters 
+ggplot(train, aes(Rooms,Bathroom, color = housing.kmean$cluster)) + 
+		geom_point(alpha = 0.8, size = 3.5) 
+
+# ggplot(train, aes(Rooms,Bathroom, color = as.factor(train$PriceLevel))) + 
+# 		geom_point(alpha = 0.8, size = 3.5)
+```
+
+
+
+## Q3 Predictions
+
+```{r}
+calc_rmse = function(actual, predicted) {
+  sqrt(mean((actual - predicted) ^ 2))
+}
+```
+
+```{r}
+sub = train[1:3000, which(names(train) %in% c("Rooms","Price", "Bathroom", "Car", "Regionname"))]
+```
+
+**Lasso**
+
+Ridge or lasso are forms of regularized linear regressions. The regularization can also be interpreted as prior in a maximum a posteriori estimation method. Under this interpretation, the ridge and the lasso make different assumptions on the class of linear transformation they infer to relate input and output data. In the ridge, the coefficients of the linear transformation are normal distributed and in the lasso they are Laplace distributed. In the lasso, this makes it easier for the coefficients to be zero and therefore easier to eliminate some of your input variable as not contributing to the output. The lasso model can solve many of the challenges that we face with linear regression, and can be a very useful tool for fitting linear models. It's a better way to analyze data and capture relationships in the data and avoid overfitting. For this question, I picked lasso and used cv.glmnet from glmnet package to tune the parameter. The function will return two values (lambda.min and lambda.1se). In this exercise, I used "lambda.min" as the best parameter. The table of value and number of nonzero parameters are shown below. The rmse is approximately 0.8263.
+
+```{r}
+## lasso
+X = model.matrix(Price ~ ., sub)[, -1]
+y = sub$Price
+housing_lasso = cv.glmnet(X, y, alpha = 1)
+plot(housing_lasso)
+best_lambda = unlist(glance(housing_lasso))[1]
+results = data.frame(lambda = unlist(glance(housing_lasso)), num = c(sum(coef(housing_lasso, s = "lambda.min")[-1] != 0), sum(coef(housing_lasso, s = "lambda.1se")[-1] != 0)))
+colnames(results) = c("Lambda", "Number of nonzero parameters")
+knitr::kable(results, digits = 4)
+```
+
+```{r}
+# calc_rmse(actual = sub$Price,
+#          predicted = predict(housing_lasso, X))
+```
+
+
+**Stepwise Selection using AIC**
+
+```{r, eval=FALSE}
+## AIC
+lmfit=lm(Price~., data=train[,-c(1,6,11,13)])
+final = step(lmfit, direction="both", trace = 0)
+calc_rmse(actual = test$Price,
+         predicted = predict(final, test))
+```
+
+Forward and backward stepwise selection is not guaranteed to give us the best model containing a particular subset of the p predictors but that's the price to pay in order to avoid overfitting. For a given model size, they are going to have an RSS that typically will be above that for best subset. This happens only when there's correlation between the features. If the variables had no correlation, then the variables chosen by the two methods would be exactly the same. Because of the correlation between the features you can get a discrepancy between best subset and forward stepwise. Because the intercorrelation between the regressors affect the order of term entry and removal. Since you are approaching the "final" model from two different directions this aspect of your matrix can cause the methods to converge on different models. For best subset selection, the advantages of it is that it considered all the possible combinations of all model sizes. It does not miss any possible model during the model selection. But the corresponding disadvantage is that this method is computationally expensive. For forward or backward, or step wise selections, these three are have advantages in computing time, because they do not go over all models, but they might miss the real best model because they 'fix' the initial found variable, and that basically gives the chance that the really best model was missed during the search. And they do start the search from either the null model of the full model. In this part, I applied stepwise selection using AIC criteria. The selected variables in the final model are Rooms, Type, Method, Distance, Bathroom, Car and Regionname. The rmse is approximately 0.7154.
+
+
+**Random Forest**
+
+Random Forest is an ensemble method in which we create a classifier by combining several independent base classifiers. The ensemble classifier then coalesces all predictions to a final prediction based on a majority vote. By averaging several trees, there is a significantly lower risk of overfitting. It overcomes the major drawback of Decision Tree which is highly biased to training dataset. In addition, RF doesn't have strict restrictions on data and is able to deal with unbalanced and missing data. I used default tuning grid for random forest in `train` function to tune the parameter mtry. The plot below shows the process of tuning parameter. The best parameter for mtry is 4 in this case. The rmse is approximately 0.8048.
+
+```{r, eval=FALSE}
+## random forest
+housing_rf = train(Price~., data=sub, method = "rf", tuneGrid = expand.grid(mtry = 1:8))
+plot(housing_rf, main = "RMSE vs Number of Mtry")
+# calc_rmse(actual = test$Price,
+#          predicted = predict(housing_rf, newdata = test))
+```
+
+
+** K-Nearest Neighbors**
+
+The other model I used is K-Nearest Neighbor (KNN). It is one of the most basic nonparametric model. It
+is simple to implement and flexible to feature choices. Although K-Nearest Neighbor suffers from curse of
+dimensionality, we only have 11 predictors so the effect is lessened. I used default tuning grid for knn in `train` function to tune the parameter k. The plot below shows the process of tuning parameter k. The best parameter for k is 5 in this case. The rmse is approximately 0.8341.
+
+```{r}
+# k-nearest neighbors
+housing_knn = train(
+  Price ~ .,
+  data = sub,
+  method = "knn",
+  trControl = trainControl(method = "cv", number = 5),
+  tuneGrid = expand.grid(k = seq(1, 11, by = 1))
+)
+plot(housing_knn, main = "RMSE vs Number of Neighbors")
+calc_rmse(actual = test$Price,
+         predicted = predict(housing_knn, newdata = test))
+```
+
+
+```{r}
+# # random forest
+# housing_bag = randomForest(Price ~ ., data = sub, mtry = 4, importance = TRUE)
+# 
+# plot(housing_bag, col = "dodgerblue", lwd = 2, main = "Error vs Number of Trees")
+# grid()
+# 
+# housing_pred = predict(housing_bag, newdata = test)
+# bag_tst_rmse = calc_rmse(housing_pred, test$Price)
+# 
+# plot(housing_pred,test$Price,
+#      xlab = "Predicted", ylab = "Actual",
+#      main = "Predicted vs Actual: Bagged Model, Test Data",
+#      col = "dodgerblue", pch = 20)
+# grid()
+# abline(0, 1, col = "darkorange", lwd = 2)
+```
+
+
+## Q4 Suggestions for improving models
+
+```{r}
+library("foreach")
+library("doSNOW")
+rf = foreach(ntree = rep(250, 4), .combine = combine, .packages = "randomForest") %dopar% randomForest(X, y, ntree = ntree)
+
+```
+

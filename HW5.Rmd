@@ -1,0 +1,161 @@
+---
+title: "STAT 542 HW5"
+author: "Stella Lang"
+date: "April 16, 2018"
+output:
+  word_document: default
+---
+
+## Q1
+
+**(a)**
+```{r}
+# stump model
+train = function(x, y, w){
+  # sorting data points
+  index = order(x)
+  ordered_x = x[index]
+  ordered_y = y[index]
+  ordered_w = w[index]
+  score = rep(0, length(x))
+  for (i in (1:length(x))){
+    c = x[i] # currect split point
+    gini_left = sum(ordered_w[1:i]*(ordered_y[1:i]>0))/sum(ordered_w[1:i]) * (1-sum(ordered_w[1:i]*(ordered_y[1:i]>0))/sum(ordered_w[1:i]))
+    gini_right = sum(ordered_w[-(1:i)]*(ordered_y[-(1:i)]>0))/sum(ordered_w[-(1:i)]) * (1-sum(ordered_w[-(1:i)]*(ordered_y[-(1:i)]>0))/sum(ordered_w[-(1:i)]))
+    score[i] = -sum(ordered_w[1:i])/sum(w)*gini_left-sum(ordered_w[-(1:i)])/sum(w)*gini_right
+  }
+  # pick the best split point c
+  best_c = ordered_x[which.max(score)]
+  # f_l
+  l = ifelse(sum(w[x<=best_c]*y[x<=best_c])/length(x[x<=best_c]) > 0, 1, -1)
+  # f_r
+  r = ifelse(sum(w[x>best_c]*y[x>best_c])/length(x[x>best_c]) > 0, 1, -1)
+  pred = rep(0,length(x))
+  pred[x<=best_c] = l
+  pred[x>best_c] = r
+  # pred_l = pred[x<=best_c]
+  # pred_r = pred[x>best_c]
+  return(list(best_c, pred))
+}
+
+```
+
+
+**(b)**
+```{r}
+adaBoost = function(x,y,B){
+  # initial weights
+  w = rep(1/length(x), length(x))
+  alpha = rep(0, B)
+  ft = rep(list(),B)
+  gamma = rep(0, B)
+  result = rep(0, length(x))
+  for (i in 1:B){
+    # train base classifier
+    ft[[i]] = train(x,y,w)
+    # compute error
+    p = ft[[i]][[2]]
+    e = sum(w*(y!=p))
+    gamma[i] = 0.5 - e
+    # compute voting weight
+    alpha[i] = 0.5*log((1-e)/e)
+    # update weights
+    w = w*exp(-alpha[i]*y*p)/(2*sqrt(e*(1-e)))
+    result = result+alpha[i]*p
+  }
+  preds = rep(0, length(x))
+  preds[result>0] = 1
+  preds[result<0] = -1
+  return(list(preds,gamma,ft,alpha))
+}
+```
+
+
+```{r,echo=FALSE}
+# generate dataset
+n = 300
+x = runif(n)
+y = (rbinom(n,1,(sin(4*pi*x)+1)/2)-0.5)*2
+
+# testing data
+n_test = 500
+x_test = runif(n_test)
+y_test = (rbinom(n_test,1,(sin(4*pi*x_test)+1)/2)-0.5)*2
+```
+
+```{r, fig.height=4, fig.width=6}
+plot(x,col=ifelse(adaBoost(x,y,100)[[1]]==1,1,2))
+```
+
+
+```{r, fig.height=4, fig.width=6}
+plot(x_test, col=ifelse(y_test==1,1,2))
+```
+
+```{r,eval=FALSE}
+# training error and exponential error
+b_to_try = seq(1,200, by=5)
+train_err = c()
+test_err = c()
+loss = c()
+for (b in seq_along(b_to_try)){
+  p = adaBoost(x,y,b)
+  train_err[b] = mean(p[[1]]!=y)
+  test_err[b] = mean(adaBoost(x_test,y_test,b)[[1]]!=y_test)
+  loss[b] = exp(-2*sum(p[[2]]^2))
+}
+
+```
+
+```{r, fig.height=4, fig.width=4, eval=FALSE}
+plot(b_to_try, train_err, type = "b", col = "dodgerblue", cex = 1, pch = 20, 
+     ylim = c(0, 1),
+     xlab = "Boosting Iterations", ylab = "Error")
+lines(b_to_try, loss, type = "b", col = "darkorange", pch = 16)
+lines(b_to_try, test_err, type = "b", col= "black", pch = 1)
+text(150, 0.1, "testing error")
+text(150, 0.3, "training error")
+text(150, 0.8, "exponential error")
+```
+
+
+## Q2
+
+Multiply the RHS by $A-bb^T$, we got
+
+$(A^{-1}+\frac{A^{-1}bb^TA^{-1}}{1-b^TA^{-1}b})(A-bb^T)=I-A^{-1}bb^T+\frac{A^{-1}bb^T-A^{-1}b(b^TA^{-1}b)b^T}{1-b^TA^{-1}b}=I-A^{-1}bb^T+\frac{A^{-1}bb^T-(b^TA^{-1}b)A^{-1}bb^T}{1-b^TA^{-1}b}=I-A^{-1}bb^T+\frac{1-b^TA^{-1}b}{1-b^TA^{-1}b}A^{-1}bb^T=I-A^{-1}bb^T+A^{-1}bb^T=I$
+
+Therefore, $(A-bb^T)^{-1}=A^{-1}+\frac{A^{-1}bb^TA^{-1}}{1-b^TA^{-1}b}$
+
+## Q3
+
+```{r,eval=FALSE}
+# load data
+tate = read.csv("the-tate-collection.csv", sep=';')
+
+library(ppclust)
+library(cluster)
+library(ggplot2)
+# subset artworks from 20th century
+tate1900 = tate[tate$year>=1900,]
+tate1900 = tate1900[tate1900$year<2000,]
+# remove na
+tate1900 = tate1900[!is.na(tate1900$height),]
+tate1900 = tate1900[!is.na(tate1900$width),]
+# normalize data
+tate1900$size = tate1900$width*tate1900$height
+normalize = function(x){(x - min(x)) / (max(x) - min(x))}
+tate1900$size = normalize(tate1900$size)
+# using kmeans for clustering
+tate.km = kmeans(tate1900[, c("size", "year")], centers = 3, nstart = 20, trace = TRUE) 
+tate.km$cluster = as.factor(tate.km$cluster)
+# plot the clustering results
+ggplot(tate1900, aes(size, year, color = tate.km$cluster)) + geom_point()
+```
+
+```{r,eval=FALSE}
+# using fuzzy c means for clustering
+tate.fcm = fcm(tate1900[, c("size", "year")], centers=3)
+plotcluster(tate.fcm, cp=1, trans=TRUE)
+```
+

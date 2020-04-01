@@ -1,0 +1,188 @@
+---
+title: "STAT 542 HW4"
+author: "Stella Lang"
+date: "April 5, 2018"
+output: word_document
+---
+
+```{r,echo=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+library(MASS)
+library(randomForest)
+```
+
+
+## Question 2
+
+```{r,echo=FALSE}
+# load data
+source("birthrates.txt");
+birthrates = as.data.frame(birthrates)
+names(birthrates) = c("year", "rate")
+```
+
+
+```{r}
+# form basis for natural cubic splines
+myknots = quantile(birthrates$year, c(1/7, 2/7, 3/7, 4/7, 5/7, 6/7))
+K=6
+pos = function(x) x*(x>0)
+d_1 = (pos(birthrates$year - myknots[1])^3-pos(birthrates$year - myknots[K])^3)/(myknots[K]-myknots[1])
+d_2 = (pos(birthrates$year - myknots[2])^3-pos(birthrates$year - myknots[K])^3)/(myknots[K]-myknots[2])
+d_3 = (pos(birthrates$year - myknots[3])^3-pos(birthrates$year - myknots[K])^3)/(myknots[K]-myknots[3])
+d_4 = (pos(birthrates$year - myknots[4])^3-pos(birthrates$year - myknots[K])^3)/(myknots[K]-myknots[4])
+d_5 = (pos(birthrates$year - myknots[5])^3-pos(birthrates$year - myknots[K])^3)/(myknots[K]-myknots[5])
+mybasis = cbind("int" = 1, "x_1" = birthrates$year,
+                "x_2" = (myknots[K]-myknots[1])*(d_1-d_5),
+                "x_3" = (myknots[K]-myknots[2])*(d_2-d_5),
+                "x_4" = (myknots[K]-myknots[3])*(d_3-d_5),
+                "x_5" = (myknots[K]-myknots[4])*(d_4-d_5)
+                )
+
+mydata = data.frame(mybasis, rate = birthrates$rate)
+myfit = lm(rate ~ -1+., data = mydata)
+
+plot(birthrates$year, mydata$rate, ylim=c(0,280), xlab = "year", ylab = "rate", pch = 19)
+lines(birthrates$year, predict(myfit, mydata), col="red", lty=1, lwd = 3)
+abline(v = myknots, lty = 2)
+```
+Since the dataset is relatively small, CV doesn't work well. So I use RSS as a criteria to select the best number of knots.  Consider that RSS only taking care of training error and we don't have testing dataset, RSS will decrease while increasing number of knots. To prevent overfitting, I pick the number of knots where RSS is not decreasing drastically, which is 6 in this case.
+
+Polynomials fit to data tends to be erratic near the boundaries, and extrapolation can be dangerous. Natural cubic splines (NCS) forces the second and third derivatives to be zero at the boundaries, i.e., min(x) and max(x). Hence, the fitted model is linear beyond the two extreme knots. Therefore, natural cubic spline tends to yield smaller variance compared with cubic basis spline. However, NCS could be computationally expensive. A natural cubic spline interpolates the vertices, and produces a smoother curve (C2 continuous everywhere), but they're very expensive to construct. Every time one of the vertices changes, you have to reconstruct the entire curve. If you have a lot of vertices, and the vertices are changing frequently, natural cubic splines may be too expensive. 
+
+
+# Question 3
+
+**(a)**
+
+```{r,echo=FALSE}
+set.seed(1)
+n = 200
+p = 20
+x = matrix(rnorm(n*p, 0, 1), n, p)
+y =  1 + x[,1:4] %*% rep(0.5, 4) + rnorm(n)
+``` 
+
+```{r}
+num = 30
+# initialize generated y matrix
+generated_y = matrix(0, length(y), num)
+prediction_y = matrix(0, length(y), num)
+# fit models and get predicted y values
+for (i in 1:num) {
+  current_y = 1 + x[, 1:4] %*% rep(0.5, 4) + rnorm(n)
+  generated_y[, i] = current_y
+  current_fit = randomForest(x, as.vector(current_y), mtry = 10, nodesize = 30)
+  current_pred = predict(current_fit, x)
+  prediction_y[, i] = current_pred
+}
+# compute estimated degrees of freedom
+estimated_df = 0
+for (i in 1:length(y)) {
+  estimated_df = estimated_df + cov(prediction_y[i,], generated_y[i,])
+}
+# estimated_df
+```
+
+With mtry fixed, estimated degree of freedom decreases while increasing nodesize. With a nodesize of 1, the tree could have each training example in its own terminal node, which is a very large/deep tree. In that extreme case the tree can memorize the correct classification for each training example but it also leads to overfitting. By increasing the nodesize the trees can't "memorize" the training data. 
+
+With nodesize fixed, estimated degree of freedom increases while increasing mtry. mtry is indeed bound by the number of variables in your model, as it specifies the size of the variable subset that is randomly picked for each random forest iteration. Values of mtry that are close to the total number of variables in the model may weaken the forest by making the individual decision trees more correlated; when the decision trees consider similar sets of variables to split on, they are more likely to be similar, even if each is fit to a different bootstrapped data set. Ensemble models usually strive for independence of their members, as that improves predictive ability.
+
+
+**(b)**
+
+```{r}
+num = 30
+# initialize generated y matrix
+# generated_y = matrix(0, length(y), num)
+prediction_y = matrix(0, length(y), num)
+# fit models and get predicted y values
+for (i in 1:num) {
+  current_y = 1 + x[, 1:4] %*% rep(0.5, 4) + rnorm(n)
+  # generated_y[, i] = current_y
+  current_fit = randomForest(x, as.vector(current_y), ntree = 500)
+  current_pred = predict(current_fit, x)
+  prediction_y[, i] = current_pred
+}
+# compute estimated degrees of freedom
+estimated_var = 0
+for (i in 1:length(y)) {
+  estimated_var = estimated_var + sum((prediction_y[i,] - sum(prediction_y[i,])/num)^2)/num
+}
+estimated_var = estimated_var/length(y)
+```
+
+For this question, I tried ntree in {10,100,500,1000}. The results shows that larger number of trees tends to yield smaller variance. This is an obvious consequence of one of the CLTs -- each tree is a binomial trial, and the prediction of the forest is the average of many binomial trials. Moreover, the trees are iid in the sense that they are all fit on different re-samplings of the data and different random subsets of features. So you have iid binomial trails (which have finite variance because each trial is 0 or 1, i.e. has finite cardinality). This can make the predictions less volatile because the trees only have to explain chunks of your data, instead of each observation. However, too large number of trees can be computationally expensive. 
+
+## Question 4
+
+
+**(a)**
+```{r}
+# generate dataset
+set.seed(1)
+n=1000
+x = c(rnorm(n), rnorm(n, 5, 2))
+x = x[x>=-1 & x <= 8] # bounded x values
+grid = seq(-1, 8, 0.01)
+
+# plot the true density
+plot(grid, 0.5*dnorm(grid, 0, 1) + 0.5* dnorm(grid, 5, 2) , type = "l", lwd = 2, col = "blue", xlab = "x", ylab = "density", ylim = c(0, 0.25))
+
+# try different lambda
+lambda_to_try = seq(0.1, 1, by=0.1)
+
+for (j in 1:length(lambda_to_try)){
+  den = matrix(NA, length(x), length(grid))
+  for (i in 1:length(x))
+  {
+   den[i, ] =   dnorm((grid - x[i])/lambda_to_try[j])/length(x)/lambda_to_try[j]       
+    lines(grid, den[i, ], type = "l", lwd = 1, col = "orange")
+  
+  }  
+  lines(grid, colSums(den), type = "l", lwd = 2, col = "orange")
+}
+
+```
+
+For this question, I generated x values which are bounded by -1 and 8. For the bandwidth, I tried lambda in {0.1, 0.2, ...,1}.From the plot, the blue curve is the true density $f$  while other orange curves are estimations $f_n$. We can see that in the boundary region, $f_n$ usually underestimates $f$. KDEs exhibit excessive bias near the maximum and minimum observations in finite samples. This is because $f_n$ doesn’t “feel” the boundary, and penalizes for the lack of data.An estimate at a given point relies on data within a neighborhood whose width is defined by the bandwidth parameter. For points within distance h of the support boundary, part of the neighborhood is necessarily empty, since observations outside the support are impossible. Thus, standard KDEs naturally penalize estimates near the boundary of the support downward. For this reason, these estimators are only uniformly consistent on closed subsets of the interior of the distributional support.
+
+**(b)**
+
+```{r, eval=FALSE}
+num = 30
+# fit models and get predicted f(x) values
+fitted = function(x,lambda){
+  den = matrix(NA, length(x), length(grid))
+  for (i in 1:length(x))
+  {
+   den[i, ] =   dnorm((grid - x[i])/lambda)/length(x)/lambda     
+  }  
+  return(colSums(den))
+}
+
+mise = function(lambda_to_try = lambda_to_try, x){
+  result = c()
+  for (j in 1:length(lambda_to_try)) {
+  # initialize generated x matrix
+  estimated_x = matrix(0, length(grid), num)
+  generated_x = matrix(0, length(grid), num)
+  for (i in 1:num) {
+  current_x = 0.5 * dnorm(grid, 0, 1) + 0.5 * dnorm(grid, 5, 2)
+  generated_x[, i] = current_x
+  current_fit = fitted(current_x, lambda_to_try[j])
+  estimated_x[, i] = current_fit
+  }
+  
+  # compute estimated degrees of freedom
+  estimated_var = 0
+  for (i in 1:length(grid)) {
+  estimated_var = estimated_var + sum((estimated_x[i, ] - generated_x[i, ]) ^
+  2) / num
+  }
+  result[j] = estimated_var / length(grid)
+  }
+  return(result)
+}
+```
+
+In general, large bandwidth reduces the variance by smoothing over a large number of points, but this is likely to lead to bias because the points are “averaged” in a mechanical way that does not account for the particular shape of the distribution. In contrast, small bandwidth gives higher variance but have less bias.  For MISE, it will decreases first and then increases as the bandwidth increases.

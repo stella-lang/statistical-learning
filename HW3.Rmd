@@ -1,0 +1,263 @@
+---
+title: "STAT 542 HW3"
+author: "Stella Lang"
+date: "March 13, 2018"
+output: word_document
+---
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+library(ElemStatLearn)
+library(e1071)
+library(kernlab)
+library(quadprog)
+```
+
+## Q1
+
+**(a)** To select the best parameters combination, I use **tune.svm** function from e1071 package. For parameter cost, I search through 0.1, 1, 10, 100 and 1000. Three kernels chosen are linear, polynomial and radial basis. For the parameter degree for polynomial kernel, search through 2, 3 and 4. For the parameter gamma for radial basis kernel, search through 0.002, 0.003 and 0.004. The **best.performance** output from **tune.svm** function will report the lowest error rate among all models tried for each kernel. And the **best.model** output will report the model formula with lowest error rate and parameters selected. For the question, the lowest error rate obtained when using radial basis kernel with cost = 100 and gamma = 0.04.
+
+```{r, echo=FALSE, eval=FALSE}
+train = data.frame(zip.train[zip.train[,1] %in% c(4,9),])
+test = data.frame(zip.test[zip.test[,1] %in% c(4,9),])
+# svm.fit1 = svm(X1 ~ ., data = train, type='C-classification', kernel='linear',cross = 5, scale=FALSE, cost = c(0.1,1,10,100,1000))
+# svm.fit2 = svm(X1 ~ ., data = train, type='C-classification', kernel='polynomial',degree= c(2,3,4),cross = 5, scale=FALSE, cost = c(0.1,1,10,100,1000))
+# svm.fit3 = svm(X1 ~ ., data = train, type='C-classification', kernel='radial',cross = 5, gamma = c(0.002,0.003, 0.004),scale=FALSE, cost = c(0.1,1,10,100,1000))
+# svm.fit1$tot.accuracy
+# svm.fit2$tot.accuracy
+# svm.fit3$accuracies
+
+fit = tune.svm(as.factor(X1) ~ ., data = train, type='C-classification', kernel='linear',cross = 5, scale=FALSE, cost = c(0.1,1,10,100,1000))
+fit2 = tune.svm(as.factor(X1) ~ ., data = train, type='C-classification', kernel='polynomial',degree= c(2,3,4),cross = 5, scale=FALSE, cost = c(0.1,1,10,100,1000))
+fit3 = tune.svm(as.factor(X1) ~ ., data = train, type='C-classification', kernel='radial',cross = 5, gamma = c(0.002,0.003, 0.004),scale=FALSE, cost = c(0.1,1,10,100,1000))
+which.min(c(fit$best.performance, fit2$best.performance, fit3$best.performance))
+fit3$best.model
+```
+
+**(b)** Fitting the best model obtained from part a on the test dataset, the accuracy is 97.08%.
+
+```{r, echo=FALSE, eval=FALSE}
+# Apply the selected model to test dataset
+preds = predict(fit3$best.model, test[,-1])
+acc = sum(preds == test[,1])/dim(test)[1]
+```
+
+**(c)**
+(i) If the number of features is large, one may not need to map data to a higher dimensional space. That is, the nonlinear mapping does not improve the performance. Using the linear kernel is good enough, and one only searches for the parameter C. In practice, the linear kernel tends to perform very well when the number of features is large (e.g. there is no need to map to an even higher dimensional feature space). A typical example of this is document classification, with thousands of dimensions in input space.In those cases, nonlinear kernels are not necessarily significantly more accurate than the linear one. This basically means nonlinear kernels lose their appeal: they require way more resources to train with little to no gain in predictive performance. Use linear kernel when number of features is larger than number of observations.
+Use gaussian kernel when number of observations is larger than number of features. If number of observations is larger than 50,000 speed could be an issue when using gaussian kernel; hence, one might want to use linear kernel.
+
+(ii) Using cross-validation to select the best parameters could be computationally expensive if we have a large searching grid.
+
+## Q2
+
+```{r, eval=FALSE,echo=FALSE}
+# Load data
+mnist_train = read.csv("fashion-mnist_train.csv")
+mnist_test = read.csv("fashion-mnist_test.csv")
+```
+
+**(1)** For LDA, we need compute the discriminant function for each class k from the data by using the formula $\delta_k(x)=x^T\Sigma^{-1}\mu_k - 0.5\mu_k^T\Sigma^{-1}\mu_k + log(\pi_k)=w_k^Tx+b_k$ from "class" page 19. To calculate pooled covariance, we use $\hat{\Sigma}=\frac{1}{n-K}\sum\limits_{k=1}^{K}\sum\limits_{i:y_i=k}(x_i-\hat{\mu_k})(x_i-\hat{\mu_k})^T$. For calculation convinience, I use **split** function to divide the data by their labels. After calculating the $w_k$ and $b_k$ for each class using training dataset, use the test dataset to compute the discriminant function values for each observation and the prediction is chosed by selecting the class with highest $\delta_k(x)$ value. For this question, the accuracy we got for test dataset is 82.56%, which is very similar to the results using built-in lda function.
+
+```{r,eval=FALSE}
+# Compute pooled covariance
+group = split(mnist_train[,-1], mnist_train[,1])
+cov_list = lapply(group,cov)
+ret = matrix(0, 784, 784)
+for (i in 1:10){
+  ret = ret + cov_list[[i]]
+}
+ret = ret/(dim(mnist_train)[1] - 10)
+
+# Compute w_k and b_k
+w = rep(list(matrix(0, 784, 1)), 10)
+b = c()
+for (i in 1:10){
+  mu_k = as.matrix(apply(group[[i]], 2, mean))
+  pi_k = dim(group[[i]])[1]/dim(mnist_train)[1]
+  w[[i]] = solve(ret) %*% mu_k
+  b[i] = -0.5 * t(mu_k) %*% solve(ret) %*% mu_k + log(pi_k)
+}
+
+# Test on test dataset
+pred = apply(mnist_test[,-1], 1, function(x){
+  result = c()
+  for (i in 1:10){
+    result[i] = t(w[[i]]) %*% x + b[i]
+  }
+  return(which.max(result) - 1)
+})
+
+accuracy = sum(pred == mnist_test[,1])/10000
+```
+
+
+**(b)** For regularized QDA, we need compute the discriminant function for each class k from the data by using the formula $\delta_k(x)=-0.5log(|\Sigma_k|)-0.5(x-\mu_k)^T\Sigma_k^{-1}(x-\mu_k)+ log(\pi_k)=x^TWx + w_k^Tx+b_k$ from "class" page 23. And the regularized covariances are $\hat{\Sigma_k}(\alpha)=\alpha\hat{\Sigma_k}+(1-\alpha)\hat{\Sigma}$. To calculate the determinant of $\Sigma_k$, we use `sum(log(svd(x)$d))` to approximate it. After calculating the $w_k$ and $b_k$ for each class using training dataset, use the test dataset to compute the discriminant function values for each observation and the prediction is chosed by selecting the class with highest $\delta_k(x)$ value.Then alter the $\alpha$ values in the range (0,1) and repeat the whole process to determine which $\alpha$ gives higher test accuracy. For this question, the accuracy we got for test dataset is around 84% with $\alpha=0.05$, which gives a slightly better result than LDA we used in part a.
+
+```{r,eval=FALSE,echo=FALSE}
+# Compute regularized covariance
+reg_cov = lapply(group, function(x, a=0.05){
+  a * cov(x) + (1-a) * ret
+})
+
+# Compute w_k, b_k
+w = rep(list(matrix(0, 784, 1)), 10)
+b = c()
+for (i in 1:10){
+  mu_k = as.matrix(apply(group[[i]], 2, mean))
+  pi_k = dim(group[[i]])[1]/dim(mnist_train)[1]
+  w[[i]] = solve(reg_cov[[i]]) %*% mu_k
+  b[i] = -0.5 * t(mu_k) %*% solve(reg_cov[[i]]) %*% mu_k + log(pi_k) - 0.5 * sum(log(svd(cov(group[[i]]))$d))
+}
+
+pred = apply(mnist_test[,-1], 1, function(x){
+  x = as.matrix(x)
+  result = c()
+  for (i in 1:10){
+    result[i] = t(x) %*% reg_cov[[i]] %*% x + t(w[[i]]) %*% x + b[i]
+  }
+  return (which.max(result) - 1)
+})
+
+accuracy = sum(pred == mnist_test[,1])/10000
+```
+
+**(c)**
+Overall, the main advantage of the LDA is the existence of an explicit solution and its computational convenience. The price we pay is the set of assumptions that go with it, namely linear separability and equality of covariance matrices. One of the disadvantages of LDA is that it does not work well if the design is not balanced (i.e. the number of objects in various classes are (highly) different). In addition, LDA is sensitive to overfitting and is not applicable for non-linear problems. It may also suffer from multicollinearity problem. QDA is more suitable when the the populations are normal with unequal covariance matrices. It gives a non-linear boundrary and is more flexible compared to LDA. However, QDA can be more computationally expensive than LDA. Regularized discriminant analysis is sort of a trade-off between LDA and QDA. RDA shrinks the separate covariances of QDA toward a common covariance as in LDA. Depends on the dataset, it might gives lower error rate on test dataset than other methods if alpha is chosen properly. Same as QDA, RDA can be more computationally expensive than LDA.
+
+
+## Q3
+
+**(a)** For the seperable data, we first use **svm** function from package e1071 to compute the intercept and slope for the decision line. The plot is shown below. 
+
+```{r, echo=FALSE}
+# Generate a seperable dataset 
+set.seed(1)
+n = 40
+p = 2
+xpos = matrix(rnorm(n * p, mean = 0, sd = 1), n, p)
+xneg = matrix(rnorm(n * p, mean = 4, sd = 1), n, p)
+x = rbind(xpos , xneg)
+y = matrix(c(rep(1, n), rep(-1, n)))
+
+# Plot decision line produced by package e1071
+svm.fit = svm(y ~ ., data = data.frame(x, y), type='C-classification', kernel='linear',scale=FALSE, cost = 10000)
+w = t(svm.fit$coefs) %*% svm.fit$SV
+b = -svm.fit$rho
+plot(x,col=ifelse(y>0,"red", "blue"), pch = 19, cex = 1.2, lwd = 2, xlab = "X1", ylab = "X2", main = "SVM (using package e1071)", cex.lab = 1.5)
+abline(a= -b/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=1, lwd = 2)
+abline(a= (-b-1)/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=3, lwd = 2)
+abline(a= (-b+1)/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=3, lwd = 2)
+points(x[svm.fit$index, ], col="black", cex=3)
+```
+
+In order to use **solve.QP** function from package quadprog, we need make sure that **D** is positive definite. Therefore, I add a 80x80 diagonal matrix with 1e-4 as diagonal elements to **D**. Plot the decision line obtained via **solve.QP**. Comparing these two decision lines obtained via different packages, we can see that they are quite similar. 
+
+```{r, echo=FALSE}
+train = data.frame(x,y)
+train = train[order(train$y, decreasing=TRUE),]
+x = as.matrix(train[, c(1,2)])
+y = as.matrix(train$y)
+n = dim(x)[1]
+
+# Diagonal elements for matrix added to D
+eps = 1e-4
+
+# Define the inputs for solve.QP function
+Q = sapply(1:n, function(i) y[i]*t(x)[,i])
+D = t(Q)%*%Q
+d = matrix(1, nrow=n)
+b0 = rbind( matrix(0, nrow=1, ncol=1) , matrix(0, nrow=n, ncol=1) )
+A = t(rbind(matrix(y, nrow=1, ncol=n), diag(nrow=n)))
+
+# Call the QP solver
+sol = solve.QP(D + eps*diag(n), d, A, b0, meq=1, factorized=FALSE)
+qpsol = matrix(sol$solution, nrow=n)
+findLine = function(a, y, x){
+  nonzero =  abs(a) > 1e-5
+  W = rowSums(sapply(which(nonzero), function(i) a[i]*y[i]*x[i,]))
+  b = mean(sapply(which(nonzero), function(i) x[i,]%*%W - y[i]))
+  slope = -W[1]/W[2]
+  intercept = b/W[2]
+  return(c(intercept,slope))
+}
+qpline = findLine(qpsol, y, x)
+
+# Plot decision line produced by package quadprog
+plot(x,col=ifelse(y>0,"red", "blue"), pch = 19, cex = 1.2, lwd = 2, xlab = "X1", ylab = "X2", main = "SVM (using package quadprog)", cex.lab = 1.5)
+abline(a=qpline[1], b=qpline[2], col="black", lty=1, lwd = 2)
+
+```
+
+Take a closer look at the values of intercept and slope, they are very close.
+
+```{r,echo=FALSE}
+knitr::kable(data.frame(intercept = c(-b/w[1,2], qpline[1]), slope = c(-w[1,1]/w[1,2],qpline[2]), row.names = c("use e1071", "use quadprog")), full_width = FALSE)
+```
+
+
+**(b)**
+For the non-seperable data, we follow the same steps in part a. The cost I used in **svm** function from package e1071 is 1 since the data is non-seperable. The plot is shown below. Also plot the decision line obtained via **solve.QP**. Comparing these two decision lines obtained via different packages, we can see that they are quite similar. 
+
+```{r,echo=FALSE}
+# Generate a non-seperable dataset
+set.seed(1)
+n = 40 # number of data points for each class
+p = 2 # dimension
+
+# Generate the positive and negative examples
+xpos = matrix(rnorm(n*p,mean=0,sd=1),n,p)
+xneg = matrix(rnorm(n*p,mean=2,sd=1),n,p)
+x = rbind(xpos,xneg)
+y = matrix(c(rep(1,n),rep(-1,n)))
+
+# Plot decision line produced by package e1071
+svm.fit = svm(y ~ ., data = data.frame(x, y), type='C-classification', kernel='linear',scale=FALSE, cost = 1)
+w = t(svm.fit$coefs) %*% svm.fit$SV
+b = -svm.fit$rho
+plot(x,col=ifelse(y>0,"red", "blue"), pch = 19, cex = 1.2, lwd = 2, xlab = "X1", ylab = "X2", main = "SVM (using package e1071)", cex.lab = 1.5)
+abline(a= -b/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=1, lwd = 2)
+abline(a= (-b-1)/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=3, lwd = 2)
+abline(a= (-b+1)/w[1,2], b=-w[1,1]/w[1,2], col="black", lty=3, lwd = 2)
+points(x[svm.fit$index, ], col="black", cex=3)
+```
+
+
+```{r, echo=FALSE}
+train = data.frame(x,y)
+train = train[order(train$y, decreasing=TRUE),]
+x = as.matrix(train[, c(1,2)])
+y = as.matrix(train$y)
+n = dim(x)[1]
+
+# Diagonal elements for matrix added to D
+eps = 1e-4
+
+# Define the inputs for solve.QP function
+Q = sapply(1:n, function(i) y[i]*t(x)[,i])
+D = t(Q)%*%Q
+d = matrix(1, nrow=n)
+b0 = rbind( matrix(0, nrow=1, ncol=1) , matrix(0, nrow=n, ncol=1) )
+A = t(rbind(matrix(y, nrow=1, ncol=n), diag(nrow=n)))
+
+# Call the QP solver
+sol = solve.QP(D + eps*diag(n), d, A, b0, meq=1, factorized=FALSE)
+qpsol = matrix(sol$solution, nrow=n)
+qpline = findLine(qpsol, y, x)
+
+# Plot decision line produced by package quadprog
+plot(x,col=ifelse(y>0,"red", "blue"), pch = 19, cex = 1.2, lwd = 2, xlab = "X1", ylab = "X2", main = "SVM (using package quadprog)", cex.lab = 1.5)
+abline(a=qpline[1], b=qpline[2], col="black", lty=1, lwd = 2)
+```
+
+The values of intercept and slope also indicate that the decision lines obtained using these two methods are very similar.
+
+```{r,echo=FALSE}
+knitr::kable(data.frame(intercept = c(-b/w[1,2], qpline[1]), slope = c(-w[1,1]/w[1,2],qpline[2]), row.names = c("use e1071", "use quadprog")), full_width = FALSE)
+```
+
+**(c)** Compute the Lagrange multipliers by the SVM optimization, $max_\alpha\sum\limits_{\alpha}\alpha_i-\frac{1}{2}\sum\limits_{i}\sum\limits_{j}\alpha_i\alpha_jy_iy_jk(x_i,x_j)$ where $k(.)$ is kernel function. And the SVM classification rule is $f(x)=\sum\limits_{i}\alpha_iy_ik(x,x_i)$.
+
+**(d)** $D=Q^TQ$ where $Q$ is a p by n matrix with each element $y_ix_j$. d is a n by 1 matrix with 1 in each element. A is a n by n+1 matrix with $y_i$ in first column and from column 2 to column n+1 is an identity matrix. b0 is a n+1 by 1 matrix with 0 in each element.
+
+
+
+
